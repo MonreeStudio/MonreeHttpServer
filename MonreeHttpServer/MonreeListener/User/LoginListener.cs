@@ -1,7 +1,9 @@
-﻿using Newtonsoft.Json;
+﻿using MySql.Data.MySqlClient;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Data;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -13,6 +15,9 @@ namespace MonreeHttpServer.MonreeListner.User
     class LoginListener
     {
         private string prefixe;
+        private MySqlConnection conn;
+        private static string connetStr = "server=127.0.0.1;port=3306;user=Monree;password=laixiaxin1718990; database=msdatetest;";
+
         public LoginListener(string prefixe)
         {
             this.prefixe = prefixe;
@@ -85,15 +90,12 @@ namespace MonreeHttpServer.MonreeListner.User
         // 用户登录
         private string MonreeLogin(string postData, String contentType)
         {
+            ConnectToMySQL();
             // 连接数据库查询
             if (!contentType.Equals("application/json"))
             {
                 // 返回登录失败
-                var failureResponse = new FailureResponse();
-                failureResponse.Code = -1;
-                failureResponse.Message = "登录失败";
-                string failureResonpseJson = JsonConvert.SerializeObject(failureResponse);
-                return failureResonpseJson;
+                return getFailureResponse(1000, "登录失败：" + "请求数据格式错误");
             }
 
             string userName = "";
@@ -105,25 +107,63 @@ namespace MonreeHttpServer.MonreeListner.User
                 JObject userInfoObject = JObject.Parse(userInfo);
                 userName = userInfoObject["UserName"].ToString();
                 password = userInfoObject["Password"].ToString();
+                if (ConnectionState.Open != conn.State)
+                {
+                    conn.Open();
+                }
+                string token = Guid.NewGuid().ToString("N");
+                string timeStamp = DateTime.Now.ToString();
+                string sql0 = "Select *from user where userName = '" + userName + "';";
+                MySqlCommand cmd0 = new MySqlCommand(sql0, conn);
+                var result0 = cmd0.ExecuteReader();
+                bool isExist = false;
+                while(result0.Read())
+                {
+                    isExist = true;
+                    if(result0.GetString("password").Equals(password))
+                    {
+                        conn.Close();
+                        conn.Open();
+                        string sql1 = "Update user set token = '" + token + "', tokenTimeStamp = '" + timeStamp + "' where userName = '" + userName + "';";
+                        MySqlCommand cmd1 = new MySqlCommand(sql1, conn);
+                        cmd1.ExecuteNonQuery();
+                        conn.Close();
+                        conn.Open();
+                        string sql2 = "Select *from user where userName = '" + userName + "';";
+                        MySqlCommand cmd2 = new MySqlCommand(sql2, conn);
+                        var result2 = cmd2.ExecuteReader();
+                        while(result2.Read())
+                        {
+                            // 返回登录成功
+                            var successResponse = new SuccessResponse();
+                            successResponse.Code = 0;
+                            successResponse.Message = "登录成功";
+                            UserItem userItem = new UserItem();
+                            userItem.Id = result2.GetString("uid");
+                            userItem.UserName = result2.GetString("userName");
+                            userItem.Password = result2.GetString("password");
+                            userItem.Token = result2.GetString("token");
+                            userItem.TimeStamp = result2.GetString("tokenTimeStamp");
+                            successResponse.User = userItem;
+                            string successResponseJson = JsonConvert.SerializeObject(successResponse);
+                            return successResponseJson;
+                        }
+                        
+                    }
+                    return getFailureResponse(1002, "登录失败：邮箱或密码错误");
+                }
+                if(!isExist)
+                {
+                    return getFailureResponse(1002, "登录失败：用户不存在");
+                }
             }
             catch (Exception e)
             {
                 Console.WriteLine(e.Message);
+                return getFailureResponse(1001, "登录失败：" + e.Message);
             }
+            return getFailureResponse(-1, "登录失败：未知原因");
             
-            // 返回登录成功
-            var successResponse = new SuccessResponse();
-            successResponse.Code = 2000;
-            successResponse.Message = "登录成功";
-            UserItem userItem = new UserItem();
-            userItem.Id = "1";
-            userItem.UserName = userName;
-            userItem.Password = password;
-            userItem.Token = Guid.NewGuid().ToString("N");
-            userItem.TimeStamp = DateTime.Now.ToString();
-            successResponse.User = userItem;
-            string successResponseJson = JsonConvert.SerializeObject(successResponse);
-            return successResponseJson;
         }
 
         class SuccessResponse
@@ -146,6 +186,30 @@ namespace MonreeHttpServer.MonreeListner.User
             public string Password { get; set; }
             public string Token { get; set; }
             public string TimeStamp { get; set; }
+        }
+
+        private string getFailureResponse(short code, string msg)
+        {
+            var failureResponse = new FailureResponse();
+            failureResponse.Code = code;
+            failureResponse.Message = msg;
+            string failureResonpseJson = JsonConvert.SerializeObject(failureResponse);
+            return failureResonpseJson;
+        }
+
+        private void ConnectToMySQL()
+        {
+            conn = new MySqlConnection(connetStr);
+            try
+            {
+                Console.WriteLine("Connecting to MySQL...");
+                conn.Open();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.ToString());
+            }
+            Console.WriteLine("Done.");
         }
     }
 }
